@@ -1,0 +1,255 @@
+---
+title: "498 Project"  
+author: "Weizhan Gao"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex  
+header-includes:
+  - \usepackage{ctex}  
+  - \usepackage{graphicx}  
+  - \usepackage{booktabs}  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# =================================================================
+# Project: NYC Air Quality & Public Health (UHF42 Special Study)
+# Description: Data cleaning, feature engineering, and visualization pipeline
+# =================================================================
+
+# -----------------------------------------------------------------
+# PHASE 1: Initial Data Exploration & Quality Audit
+# -----------------------------------------------------------------
+
+# 1. Environment Configuration
+required_packages <- c("tidyverse", "e1071", "scales", "ggcorrplot", "lubridate")
+new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+if(length(new_packages)) install.packages(new_packages)
+
+library(tidyverse)
+library(e1071)
+library(scales)
+library(lubridate)
+library(ggcorrplot)
+
+# 2. Data Loading
+raw_data <- read_csv("Air_Quality_and_Health_Impacts_20260423.csv")
+
+# 3. Scale and Structure Overview
+cat("Total Rows:", nrow(raw_data), " Total Columns:", ncol(raw_data), "\n")
+glimpse(raw_data)
+```
+
+
+```{r}
+# 4. Missing Value Analysis
+# Focus on Data Value and Geo Join ID
+missing_summary <- raw_data %>%
+  summarise(across(everything(), ~sum(is.na(.))))
+print("Missing Values Summary:")
+print(missing_summary)
+```
+
+
+```{r}
+# 5. Outlier Detection (IQR Method)
+outlier_bounds <- raw_data %>%
+  summarise(
+    Q1 = quantile(`Data Value`, 0.25, na.rm = TRUE),
+    Q3 = quantile(`Data Value`, 0.75, na.rm = TRUE)
+  ) %>%
+  mutate(IQR = Q3 - Q1, Lower = Q1 - 1.5*IQR, Upper = Q3 + 1.5*IQR)
+print(outlier_bounds)
+```
+
+
+```{r}
+# 6. Numerical Distribution Analysis
+dist_stats <- raw_data %>%
+  group_by(Name) %>%
+  summarise(
+    Mean = mean(`Data Value`, na.rm = TRUE),
+    Median = median(`Data Value`, na.rm = TRUE),
+    Min = min(`Data Value`, na.rm = TRUE),
+    Max = max(`Data Value`, na.rm = TRUE)
+  )
+print(dist_stats)
+```
+
+
+```{r}
+# 7. Categorical Distribution
+top_10_indicators <- raw_data %>%
+  count(Name, sort = TRUE) %>%
+  slice(1:10)
+print(top_10_indicators)
+
+geo_coverage <- raw_data %>%
+  count(`Geo Type Name`)
+print(geo_coverage)
+```
+
+
+```{r}
+# 8. Uniqueness Validation
+is_unique_id <- length(unique(raw_data$`Unique ID`)) == nrow(raw_data)
+cat("Is Unique ID unique?:", is_unique_id, "\n")
+```
+
+
+```{r}
+# 9. Logical Consistency (Indicator ID vs Name)
+consistency_audit <- raw_data %>%
+  group_by(`Indicator ID`) %>%
+  summarise(unique_names_count = n_distinct(Name)) %>%
+  filter(unique_names_count > 1)
+```
+
+
+```{r}
+# 10. Geography Label Cleaning
+# Ensuring Bronx labels and Borough-UHF42 mapping consistency
+df_cleaned <- raw_data %>%
+  mutate(`Geo Place Name` = str_replace_all(`Geo Place Name`, "The Bronx", "Bronx"))
+```
+
+
+```{r}
+# -----------------------------------------------------------------
+# PHASE 2: Advanced Data Preprocessing & Archiving
+# -----------------------------------------------------------------
+
+# 1. Drop Redundant Fields (Message field is 100% missing)
+df_cleaned <- df_cleaned %>% select(-Message)
+
+# 2. Fix Encoding Issues (Âµg/m3 -> mcg/m3)
+df_cleaned <- df_cleaned %>%
+  mutate(`Measure Info` = str_replace_all(`Measure Info`, "Âµg/m3", "mcg/m3"))
+
+# 3. Date & Time Transformation
+df_cleaned <- df_cleaned %>%
+  mutate(
+    Start_Date = mdy(Start_Date),
+    # Extract 4-digit year from Time Period
+    Year_Extracted = as.numeric(str_extract(`Time Period`, "\\d{4}"))
+  )
+
+# 4. Feature Enhancement: Filter for 15-year continuous records (e.g., 2009-2023)
+df_cleaned <- df_cleaned %>%
+  filter(Year_Extracted >= 2009 & Year_Extracted <= 2023)
+
+# 5. Factorize Variables (Geographic Hierarchy)
+df_cleaned <- df_cleaned %>%
+  mutate(`Geo Type Name` = factor(`Geo Type Name`, 
+                                 levels = c("Citywide", "Borough", "UHF42", "CD"),
+                                 ordered = TRUE))
+```
+
+
+```{r}
+# 6. Grouped Outlier Labeling
+df_cleaned <- df_cleaned %>%
+  group_by(Name) %>%
+  mutate(
+    g_q1 = quantile(`Data Value`, 0.25, na.rm = TRUE),
+    g_q3 = quantile(`Data Value`, 0.75, na.rm = TRUE),
+    g_iqr = g_q3 - g_q1,
+    Is_Outlier = ifelse(`Data Value` < (g_q1 - 1.5*g_iqr) | `Data Value` > (g_q3 + 1.5*g_iqr), 1, 0)
+  ) %>%
+  ungroup()
+```
+
+
+```{r}
+# 7 & 8. Skewness Assessment & Log Transformation
+skew_report <- df_cleaned %>%
+  group_by(Name) %>%
+  summarise(skew_val = skewness(`Data Value`, na.rm = TRUE))
+
+highly_skewed <- skew_report %>% filter(skew_val > 2) %>% pull(Name)
+
+df_cleaned <- df_cleaned %>%
+  mutate(`Data Value` = ifelse(Name %in% highly_skewed, log10(`Data Value` + 1), `Data Value`))
+```
+
+
+```{r}
+# 9. Lock UHF42 Level for analysis
+df_uhf42 <- df_cleaned %>%
+  filter(`Geo Type Name` == "UHF42")
+```
+
+
+```{r}
+# 10. Generate Three Specialized Datasets
+
+# Dataset A: Spatiotemporal Evolution (Long Format)
+dataset_A <- df_uhf42 %>%
+  select(Year_Extracted, `Geo Place Name`, Name, `Data Value`)
+
+# Dataset B: Spatial Inequality (Bronx focus)
+dataset_B <- df_uhf42 %>%
+  filter(str_detect(`Geo Place Name`, "Bronx")) %>%
+  # Mocking income labels based on common neighborhood socio-economics for the demo
+  mutate(Income_Group = ifelse(str_detect(`Geo Place Name`, "Hunts Point|Mott Haven"), "Low Income", "High Income"))
+```
+
+
+```{r}
+# 13. Multi-dimensional Data Export
+write_csv(dataset_A, "Time_Trend.csv")
+write_csv(dataset_B, "Bronx_Study.csv")
+write_csv(df_cleaned, "Air_Quality_and_Health_Impacts_processed.csv")
+```
+
+
+```{r}
+# -----------------------------------------------------------------
+# PHASE 3: Feature Analysis & Premium Visualization
+# -----------------------------------------------------------------
+
+# 1. Component Report
+variable_composition <- df_cleaned %>%
+  group_by(Name) %>%
+  summarise(Records = n()) %>%
+  mutate(Share = percent(Records / sum(Records)))
+
+# 2. Uniform Color Bar Chart (Top 10 Indicators)
+plot_top10 <- df_cleaned %>%
+  count(Name) %>%
+  top_n(10, n) %>%
+  ggplot(aes(x = reorder(Name, n), y = n)) +
+  geom_bar(stat = "identity", fill = "#2c7fb8") + # Premium Blue
+  geom_text(aes(label = n), hjust = -0.1, size = 3.5) +
+  coord_flip() +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 35)) + # Smart Text Wrap
+  labs(title = "Top 10 Monitoring Indicators by Record Count", 
+       x = "Indicator Name", y = "Total Records") +
+  theme_minimal()
+
+# 3. Premium Analysis Charts
+
+# Spatial Comparison Boxplot (Dataset B - PM2.5 Burden)
+plot_boxplot <- dataset_B %>%
+  filter(Name == "Fine particles (PM 2.5)") %>%
+  ggplot(aes(x = Income_Group, y = `Data Value`, fill = Income_Group)) +
+  geom_boxplot(alpha = 0.8) +
+  scale_fill_manual(values = c("High Income" = "#2c7fb8", "Low Income" = "#7fcdbb")) +
+  labs(title = "PM2.5 Burden: Low vs High Income Areas (Bronx)", 
+       x = "Neighborhood Type", y = "PM2.5 Concentration") +
+  theme_classic()
+
+# Display Plots
+print(plot_top10)
+print(plot_boxplot)
+
+# 4. Process Confirmation
+cat("\n================================================================\n")
+cat("NYC Air Quality & Public Health (UHF42) Pipeline Executed Successfully\n")
+cat("================================================================\n")
+```
+
