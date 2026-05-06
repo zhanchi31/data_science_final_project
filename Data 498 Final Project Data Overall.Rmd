@@ -1,0 +1,155 @@
+---
+title: "498 Project"  
+author: "Lei Wei"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex  
+header-includes:
+  - \usepackage{ctex}  
+  - \usepackage{graphicx}  
+  - \usepackage{booktabs}  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# 1. Load Required Libraries
+library(tidyverse)
+library(ggdist)
+library(ggcorrplot)
+library(viridis)
+library(scales)
+library(knitr) # For clean table output
+
+# 2. Load Processed Data
+df_final <- read_csv("Air_Quality_and_Health_Impacts_processed.csv")
+
+# 3. Label Shortening Helper (Ensures clean correlation plots)
+shorten_labels <- function(x) {
+  x %>%
+    str_replace_all("Fine particles \\(PM 2.5\\)", "PM2.5") %>%
+    str_replace_all("Nitrogen dioxide \\(NO2\\)", "NO2") %>%
+    str_replace_all("Ozone \\(O3\\)", "Ozone") %>%
+    str_replace_all("Asthma emergency department visits due to", "Asthma_ED") %>%
+    str_replace_all("Annual vehicle miles traveled", "VMT") %>%
+    str_replace_all("Cardiovascular hospitalizations due to", "Cardio_Hosp") %>%
+    str_replace_all("Deaths due to", "Mortality") %>%
+    str_trunc(25) %>%
+    make.unique()
+}
+
+# =================================================================
+# SECTION 1: VISUALIZATIONS (Saved as Independent High-Res Files)
+# =================================================================
+
+# PLOT 1: Top 10 Monitoring Indicators (Clean Blue Bar Chart)
+p1 <- df_final %>%
+  count(Name) %>%
+  top_n(10, n) %>%
+  ggplot(aes(x = reorder(Name, n), y = n)) +
+  geom_bar(stat = "identity", fill = "#2c7fb8", width = 0.7) +
+  geom_text(aes(label = n), hjust = -0.2, size = 3.5, fontface = "bold") +
+  coord_flip() +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 45)) +
+  labs(title = "Top 10 Environmental Indicators by Record Count",
+       subtitle = "Data source: UHF42 Special Study (2009-2023)",
+       x = "Indicator Name", y = "Total Records") +
+  theme_minimal(base_size = 14) +
+  theme(panel.grid.minor = element_blank())
+
+ggsave("Plot1_Top_Indicators.png", p1, width = 12, height = 7)
+
+# PLOT 2: PM2.5 Burden - Socio-economic Proxy (Boxplot)
+p2 <- df_final %>%
+  filter(Name == "Fine particles (PM 2.5)") %>%
+  filter(`Geo Type Name` == "UHF42") %>%
+  mutate(Income_Group = ifelse(str_detect(`Geo Place Name`, "Hunts Point|Mott Haven|Harlem|Bedford Stuyvesant"), 
+                               "Low Income Area", "High Income Area")) %>%
+  ggplot(aes(x = Income_Group, y = `Data Value`, fill = Income_Group)) +
+  geom_boxplot(alpha = 0.8, width = 0.4, outlier.alpha = 0.3) +
+  scale_fill_manual(values = c("High Income Area" = "#2c7fb8", "Low Income Area" = "#7fcdbb")) +
+  labs(title = "PM2.5 Concentration: Socio-economic Comparison",
+       subtitle = "Comparing identified Low-Income proxies vs High-Income areas",
+       x = "Neighborhood Socio-economic Proxy", y = "PM2.5 Concentration (mcg/m3)") +
+  theme_classic(base_size = 14)
+
+ggsave("Plot2_PM25_Income_Equity.png", p2, width = 9, height = 6)
+
+# PLOT 3: Indicator Correlation Bubble Matrix
+df_wide <- df_final %>%
+  filter(`Geo Type Name` == "UHF42") %>%
+  group_by(`Geo Place Name`, Name) %>%
+  summarise(Avg_Value = mean(`Data Value`, na.rm = TRUE), .groups = 'drop') %>%
+  pivot_wider(names_from = Name, values_from = Avg_Value)
+
+colnames(df_wide) <- shorten_labels(colnames(df_wide))
+corr_matrix <- cor(df_wide %>% select(where(is.numeric)), use = "pairwise.complete.obs")
+
+p3 <- ggcorrplot(corr_matrix, 
+                 hc.order = TRUE, type = "lower", lab = TRUE, lab_size = 3,
+                 method = "circle", 
+                 colors = c("#2c7fb8", "white", "#e6550d"),
+                 title = "Correlation Matrix: Air Quality vs. Health Outcomes") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("Plot3_Correlation_Matrix.png", p3, width = 12, height = 11)
+
+# PLOT 4: Spatial PM2.5 Distribution (Advanced Raincloud Plot)
+p4 <- df_final %>%
+  filter(Name == "Fine particles (PM 2.5)") %>%
+  filter(!is.na(`Geo Type Name`)) %>%
+  ggplot(aes(x = `Geo Type Name`, y = `Data Value`, fill = `Geo Type Name`)) +
+  stat_halfeye(adjust = .5, width = .6, justification = -.3, .width = 0, point_colour = NA) +
+  geom_boxplot(width = .1, outlier.shape = NA, alpha = 0.5) +
+  geom_point(position = position_jitter(width = .1), alpha = 0.2, size = 0.6) +
+  scale_fill_viridis_d(option = "mako", begin = 0.3) +
+  labs(title = "PM2.5 Density Distribution Across Geo Scales",
+       subtitle = "Comparing variation between Borough, CD, and UHF42 levels",
+       x = "Geographic Category", y = "Concentration (Processed)") +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+
+ggsave("Plot4_PM25_Raincloud.png", p4, width = 11, height = 7)
+
+
+# =================================================================
+# SECTION 2: TABULAR SUMMARIES (Console Output)
+# =================================================================
+
+cat("\n--- TABLE 1: Descriptive Statistics for Key Pollutants ---\n")
+summary_stats <- df_final %>%
+  filter(Name %in% c("Fine particles (PM 2.5)", "Nitrogen dioxide (NO2)", "Ozone (O3)")) %>%
+  group_by(Name) %>%
+  summarise(
+    Records = n(),
+    Mean = round(mean(`Data Value`, na.rm = TRUE), 2),
+    SD = round(sd(`Data Value`, na.rm = TRUE), 2),
+    Min = round(min(`Data Value`, na.rm = TRUE), 2),
+    Max = round(max(`Data Value`, na.rm = TRUE), 2)
+  )
+print(summary_stats)
+
+cat("\n--- TABLE 2: Top 10 Polluted Neighborhoods (PM2.5 Avg) ---\n")
+hotspot_neighborhoods <- df_final %>%
+  filter(Name == "Fine particles (PM 2.5)", `Geo Type Name` == "UHF42") %>%
+  group_by(`Geo Place Name`) %>%
+  summarise(Avg_PM25 = round(mean(`Data Value`, na.rm = TRUE), 3)) %>%
+  arrange(desc(Avg_PM25)) %>%
+  head(10)
+print(hotspot_neighborhoods)
+
+cat("\n--- TABLE 3: Outlier Frequency by Borough ---\n")
+outlier_table <- df_final %>%
+  filter(Is_Outlier == 1) %>%
+  group_by(`Geo Type Name`) %>%
+  count(name = "Outlier_Count") %>%
+  arrange(desc(Outlier_Count))
+print(outlier_table)
+
+cat("\nProcessing Complete. 4 High-Res PNG files and 3 Summary Tables generated.\n")
+```
+
