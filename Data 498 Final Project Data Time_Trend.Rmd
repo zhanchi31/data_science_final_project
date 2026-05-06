@@ -1,0 +1,177 @@
+---
+title: "498 Project"  
+author: "Lei Wei"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex  
+header-includes:
+  - \usepackage{ctex}  
+  - \usepackage{graphicx}  
+  - \usepackage{booktabs}  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# ==============================================================================
+# NYC AIR QUALITY: FULL ANALYTICAL PIPELINE & PERFORMANCE AUDIT
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Environment & Data Ingestion
+# ------------------------------------------------------------------------------
+library(tidyverse)    
+library(tsibble)      
+library(fable)        
+library(feasts)       
+
+# Load data and ensure valid time-series structure
+full_ts <- read_csv("Time_Trend.csv") %>%
+  group_by(Year_Extracted, `Geo Place Name`, Name) %>%
+  summarise(Value = mean(`Data Value`, na.rm = TRUE), .groups = "drop") %>%
+  as_tsibble(key = c(`Geo Place Name`, Name), index = Year_Extracted)
+
+# Define Core Pollutants
+core_indicators <- c("Fine particles (PM 2.5)", "Nitrogen dioxide (NO2)", "Ozone (O3)")
+core_ts <- full_ts %>% filter(Name %in% core_indicators)
+```
+
+
+```{r}
+# ------------------------------------------------------------------------------
+# 2. PHASE A: MODEL EVALUATION (Backtesting on 2020-2023)
+# ------------------------------------------------------------------------------
+# We train on data up to 2019 and test against the actual 2020-2023 data
+train_data <- core_ts %>% filter(Year_Extracted <= 2019)
+test_data  <- core_ts %>% filter(Year_Extracted > 2019)
+
+# Fit ARIMA and ETS models for evaluation
+evaluation_fit <- train_data %>%
+  model(
+    arima = ARIMA(Value),
+    ets = ETS(Value)
+  )
+
+# Calculate accuracy metrics across all neighborhoods and pollutants
+all_performance <- evaluation_fit %>%
+  forecast(h = 4) %>%
+  accuracy(test_data) %>%
+  select(Name, `Geo Place Name`, .model, RMSE, MAPE, MAE) %>%
+  arrange(MAPE)
+
+# ------------------------------------------------------------------------------
+# 3. PHASE B: STRATEGIC FORECASTING (2024-2028)
+# ------------------------------------------------------------------------------
+# Fit models using all data up to 2023 for the most informed future projection
+strategic_fit <- core_ts %>%
+  model(
+    arima_strat = ARIMA(Value),
+    ets_strat = ETS(Value)
+  )
+
+final_forecast <- strategic_fit %>% forecast(h = 5)
+```
+
+
+```{r}
+# ------------------------------------------------------------------------------
+# 4. PRINT SUMMARY TABLES
+# ------------------------------------------------------------------------------
+
+# TABLE 1: Top 10 Best Performing Models Overall (Lowest MAPE)
+cat("\n======================================================================\n")
+cat("TABLE 1: GLOBAL TOP PERFORMING MODELS (Lowest Error Rates)\n")
+cat("======================================================================\n")
+print(head(all_performance, 10))
+
+# TABLE 2: Performance Audit for Core Indicators (Target Area)
+target_geo <- "Downtown - Heights - Slope"
+cat("\n======================================================================\n")
+cat("TABLE 2: ACCURACY AUDIT FOR:", target_geo, "\n")
+cat("======================================================================\n")
+target_performance <- all_performance %>% 
+  filter(`Geo Place Name` == target_geo) %>%
+  arrange(Name, MAPE)
+print(target_performance)
+```
+
+
+```{r}
+# ------------------------------------------------------------------------------
+# 5. COMPARATIVE VISUALIZATION (Fixed Legend)
+# ------------------------------------------------------------------------------
+target_indicator <- "Fine particles (PM 2.5)"
+
+# Pre-2020 Baseline for comparison
+pre2020_baseline_fc <- evaluation_fit %>%
+  filter(`Geo Place Name` == target_geo, Name == target_indicator) %>%
+  forecast(h = 9)
+
+# Plotting with wrapped legend
+comparison_plot <- final_forecast %>%
+  filter(`Geo Place Name` == target_geo, Name == target_indicator) %>%
+  autoplot(core_ts %>% filter(`Geo Place Name` == target_geo, Name == target_indicator), 
+           level = 95) +
+  
+  # Overlay Pre-2020 Baseline (Dashed)
+  autolayer(pre2020_baseline_fc, level = NULL, linetype = "dashed", size = 1) +
+  
+  # Test Period Shading
+  annotate("rect", xmin = 2020, xmax = 2023, ymin = -Inf, ymax = Inf, 
+           fill = "#636363", alpha = 0.1) +
+  annotate("text", x = 2021.5, y = 14, label = "Test Period\n(2020-2023)", 
+           color = "#525252", size = 3.5, fontface = "bold", vjust = 1) +
+  
+  # WHO Guideline
+  geom_hline(yintercept = 5, linetype = "dotted", color = "#e41a1c", size = 0.8) +
+  annotate("text", x = 2009, y = 5.5, label = "WHO Guideline (5 µg/m³)", 
+           color = "#e41a1c", size = 3, hjust = 0, fontface = "italic") +
+  
+  # Color Scale & Multi-Row Legend Fix
+  scale_color_manual(
+    values = c("arima_strat" = "#2c7fb8", "ets_strat" = "#7fcdbb", 
+               "arima" = "#d95f02", "ets" = "#fdb462"),
+    labels = c("arima_strat" = "Strategic ARIMA (Full Data)", 
+               "ets_strat" = "Strategic ETS (Full Data)",
+               "arima" = "Pre-2020 ARIMA (Baseline)", 
+               "ets" = "Pre-2020 ETS (Baseline)")
+  ) +
+  guides(color = guide_legend(nrow = 2, byrow = TRUE, title.position = "top"),
+         fill = "none") +
+  
+  # Labels and Theme
+  labs(
+    title = "Air Quality Strategic Comparison: Model Evaluation & Future Projection",
+    subtitle = paste("Location:", target_geo, "| Indicator:", target_indicator),
+    x = "Year", y = "Concentration (µg/m³)",
+    color = "Forecasting Scenario",
+    caption = "Dashed lines: Projected using only pre-2020 data | Solid lines: Projected using data through 2023."
+  ) +
+  scale_x_continuous(breaks = seq(2009, 2028, by = 2)) +
+  scale_y_continuous(limits = c(0, 15)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    legend.box = "vertical",
+    legend.text = element_text(size = 9),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.margin = margin(10, 10, 30, 10),
+    panel.grid.minor = element_blank()
+  )
+```
+
+
+```{r}
+# ------------------------------------------------------------------------------
+# 6. EXECUTE PLOT
+# ------------------------------------------------------------------------------
+print(comparison_plot)
+```
+
+
+
+
+
