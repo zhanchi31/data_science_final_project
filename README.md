@@ -1,5 +1,3 @@
-# data_science_final_project
-
 # NYC Air Quality and Public Health Analysis
 
 ## Project Overview
@@ -42,17 +40,16 @@ The dataset contains information such as:
 
 ```text
 ├── README.md
+├── data_dictionary.md
+├── project_code.Rmd
+├── Data 498 Final Project Data preprocessing.Rmd
+├── Data 498 Final Project Data Overall.Rmd
+├── Data 498 Final Project Data Time_Trend.Rmd
 ├── Air_Quality_and_Health_Impacts_20260423.csv
 ├── Air_Quality_and_Health_Impacts_processed.csv
-├── Time_Trend.csv
-├── Data preprocessing.Rmd
-├── Data Overall.Rmd
-├── Data Time_Trend.Rmd
-├── Plot1_Top_Indicators.png
-├── Plot2_PM25_Income_Equity.png
-├── Plot3_Correlation_Matrix.png
-└── Plot4_PM25_Raincloud.png
+└── Time_Trend.csv
 ```
+`project_code.Rmd` contains the combined project code, while `data_dictionary.md` provides descriptions of the main variables used in the dataset.
 
 ## Required R Packages
 
@@ -105,7 +102,7 @@ Open the project folder in RStudio and make sure all CSV files and R Markdown fi
 Run:
 
 ```text
-Data preprocessing.Rmd
+Data 498 Final Project Data preprocessing.Rmd
 ```
 
 This notebook performs:
@@ -130,7 +127,7 @@ Time_Trend.csv
 Run:
 
 ```text
-Data Overall.Rmd
+Data 498 Final Project Data Overall.Rmd
 ```
 
 This notebook generates:
@@ -147,7 +144,7 @@ This notebook generates:
 Run:
 
 ```text
-Data Time_Trend.Rmd
+Data 498 Final Project Data Time_Trend.Rmd
 ```
 
 This notebook performs:
